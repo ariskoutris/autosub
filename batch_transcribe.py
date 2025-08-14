@@ -39,6 +39,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     p.add_argument("--concurrency", type=int, default=min(4, os.cpu_count() or 2))
     p.add_argument("--skip-existing", action="store_true", help="Skip files whose .txt already exists")
     p.add_argument("--srt", action="store_true", help="Also write .srt files")
+    p.add_argument("--translate", action="store_true", help="Translate speech to English instead of same-language transcription")
     p.add_argument(
         "--no-progress",
         action="store_true",
@@ -80,6 +81,8 @@ def build_cmd(transcribe_py: str, in_path: str, out_dir: str, args: argparse.Nam
         cmd += ["--language", args.language]
     if args.srt:
         cmd += ["--srt"]
+    if getattr(args, "translate", False):
+        cmd += ["--translate"]
     cmd += ["--quiet"]
     return cmd
 

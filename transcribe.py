@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """
-Transcribe an audio/video file using OpenAI's transcription API and print raw text lines.
-
-- Default model: whisper-1 (returns per-segment text via verbose_json)
-- Optional: --model to use other models (e.g., gpt-4o-transcribe). If segments are not available,
-  prints the full transcript as a single or multi-line output.
-
-Outputs ONLY the transcript text to stdout, one line per segment or line. Errors to stderr.
+Transcribe an audio/video file using OpenAI's transcription API and write in raw text lines or subtitle format.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -76,7 +71,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         default=None,
-        help="Optional path to save transcript. If a directory, saves as <dir>/<basename>.txt. If omitted, saves to ./transcripts/<basename>.txt",
+        help="Optional path to save transcript. If a directory, saves as <dir>/<basename>.txt. If omitted, saves to ./<basename>.txt",
     )
     parser.add_argument(
         "--quiet",
@@ -86,7 +81,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--srt",
         action="store_true",
-        help="Also save an .srt subtitle file (requires Whisper segments with timestamps).",
+        help="Also save an .srt subtitle file. Requires whisper-1.",
+    )
+    parser.add_argument(
+        "--translate",
+        action="store_true",
+        help="Translate speech to English instead of same-language transcription. Requires whisper-1.",
     )
     parser.add_argument(
         "--debug",
@@ -119,19 +119,10 @@ def _ensure_dir_for(path: str) -> None:
 
 
 def _compute_output_base(in_path: str, out_arg: Optional[str]) -> str:
-    """Return the base output path WITHOUT the .txt/.srt suffix.
-
-    Rules:
-    - If out_arg is None: use ./transcripts/<basename>
-    - If out_arg is a directory or endswith path sep: use <out_dir>/<basename>
-    - If out_arg is a file path:
-        - If it ends with .txt or .srt, strip that extension and use the remainder as base
-        - Otherwise, leave as-is (including any other extension)
-    """
+    """Return the base output path WITHOUT the .txt/.srt suffix."""
     in_base = os.path.splitext(os.path.basename(in_path))[0]
     if not out_arg:
-        out_dir = os.path.join(os.getcwd(), "transcripts")
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = os.getcwd()
         return os.path.join(out_dir, in_base)
     if os.path.isdir(out_arg) or out_arg.endswith(os.sep):
         out_dir = out_arg if os.path.isabs(out_arg) else os.path.join(os.getcwd(), out_arg)
@@ -408,6 +399,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     global _DEBUG_ENABLED
     _DEBUG_ENABLED = bool(getattr(args, "debug", False))
 
+    if getattr(args, "srt", False) and args.model != "whisper-1":
+        eprint("Error: --srt requires model 'whisper-1'.")
+        return 1
+    if getattr(args, "translate", False) and args.model != "whisper-1":
+        eprint("Error: --translate requires model 'whisper-1'.")
+        return 1
+
     if not os.path.isfile(args.input):
         eprint(f"Error: File not found: {args.input}")
         return 1
@@ -416,7 +414,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     client = get_client()
 
-    # Optionally extract audio to reduce upload size and avoid 413 errors
     input_path = args.input
     temp_cleanup: list[str] = []
     try:
@@ -431,7 +428,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             return False
         if args.extract_audio == "always":
             return True
-        # auto: extract if it's a known video type
         if is_video_file is not None:
             try:
                 return bool(is_video_file(args.input))
@@ -445,7 +441,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if check_ffmpeg_available and not check_ffmpeg_available():
                 eprint("ffmpeg not found on PATH; proceeding without extraction.")
             else:
-                # Use a temp dir for extracted audio
                 tmpdir = tempfile.mkdtemp(prefix="transcribe-audio-")
                 dprint("Extracting audio to temp dir:", tmpdir)
                 extracted_path = extract_audio(args.input, output_dir=tmpdir, fmt="mp3", channels=1, rate=16000, bitrate="64k")
@@ -455,28 +450,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         except Exception as ex:
             eprint(f"Audio extraction failed, continuing with original file: {ex}")
 
-    # For whisper models, request verbose_json to get segments
-    use_verbose = args.model.startswith("whisper")
-    dprint("Model:", args.model, "use_verbose=", use_verbose)
+    response_format = "verbose_json" if getattr(args, "srt", False) else "json"
+    use_verbose = (response_format == "verbose_json")
+    dprint("Model:", args.model, "translate=", getattr(args, "translate", False), "srt=", getattr(args, "srt", False), "response_format=", response_format)
 
-    # Helper to send a single file to API and parse results
     def _transcribe_one(path: str) -> Tuple[List[str], Optional[List[dict]]]:
         dprint(f"Transcribing file: {path} (size={_file_size(path)})")
         try:
             with open(path, "rb") as f:
-                if use_verbose:
-                    resp = client.audio.transcriptions.create(
-                        model=args.model,
-                        file=f,
-                        response_format="verbose_json",
-                        language=args.language,
-                    )
+                common_kwargs = {
+                    "model": args.model,
+                    "file": f,
+                    "response_format": response_format,
+                }
+
+                if getattr(args, "translate", False):
+                    resp = client.audio.translations.create(**common_kwargs)
                 else:
-                    resp = client.audio.transcriptions.create(
-                        model=args.model,
-                        file=f,
-                        language=args.language,
-                    )
+                    if args.language:
+                        common_kwargs["language"] = args.language
+                    resp = client.audio.transcriptions.create(**common_kwargs)
         except Exception as e:
             raise RuntimeError(f"Transcription request failed: {e}")
         lines, segments = _parse_transcription_response(resp, use_verbose)
@@ -485,7 +478,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         return lines, segments
 
-    # If file exceeds size limit, split into chunks; do not downscale/alter encoding
     max_bytes = MAX_CONTENT_BYTES - _SAFETY_MARGIN
     oversized = _file_size(input_path) > max_bytes
     dprint(
@@ -514,7 +506,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         combined_segments = segs
     else:
         dprint("Chunking required; checking ffmpeg availability…")
-        # Need to split into chunks (requires ffmpeg)
         if not _ffmpeg_available():
             eprint("Input exceeds 25MB and ffmpeg is not available to split into chunks. Please install ffmpeg.")
             # Clean up temp files if any
@@ -527,7 +518,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     pass
             return 1
 
-        # Determine number of chunks needed based on size
         size_bytes = max(_file_size(input_path), 1)
         import math
         est_chunks = max(2, math.ceil(size_bytes / max_bytes))
@@ -535,14 +525,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if duration and duration > 0:
             chunk_seconds = int(math.ceil(duration / est_chunks))
         else:
-            # Fallback to 10-minute chunks
             chunk_seconds = 600
         dprint(
             f"estimated chunks={est_chunks}; duration={duration}; initial chunk_seconds={chunk_seconds}"
         )
 
         try:
-            # Ensure chunks respect size limit (<= max_bytes) without re-encoding
             chunk_paths, chunk_tmpdir = _split_to_size_limit(input_path, max_bytes)
             if chunk_tmpdir:
                 temp_cleanup.append(chunk_tmpdir)
@@ -562,7 +550,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     pass
             return 1
 
-        # Transcribe chunks sequentially and stitch results
         offset = 0.0
         for idx, ch in enumerate(chunk_paths):
             dprint(f"Processing chunk {idx+1}/{len(chunk_paths)}: {os.path.basename(ch)} size={_file_size(ch)}")
@@ -573,7 +560,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 continue
             lines.extend(lns)
             dprint(f"  -> chunk produced lines={len(lns)}; segments={'None' if segs is None else len(segs)}")
-            # Offset SRT segments
             if segs:
                 if combined_segments is None:
                     combined_segments = []
@@ -590,7 +576,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                         combined_segments.append({"text": text, "start": s_start, "end": s_end})
                     else:
                         combined_segments.append({"text": text, "start": start, "end": end})
-            # Update offset by actual chunk duration if known
             ch_dur = _run_ffprobe_duration(ch)
             if ch_dur:
                 offset += float(ch_dur)
