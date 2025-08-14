@@ -5,6 +5,7 @@ Command-line tool that takes a video or audio file as input and produces the aud
 ## Features
 
 - Can generate `.srt` subtitles with synchronized timestamps.
+- Can translate foreign-language speech and generate transcripts in English.
 - No restriction on recording length. Even though the OpenAI API limits uploads to **25 MB**, the tool automatically splits larger recordings into smaller chunks, processes them individually, and merges the results.
 - Works with both audio and video files. For videos, the audio is extracted automatically using `ffmpeg`.
 - Supports all common formats (e.g., `*.{mp3,wav,m4a,mp4,mov,aac,flac,ogg,mkv}`).
@@ -14,22 +15,18 @@ Command-line tool that takes a video or audio file as input and produces the aud
 
 ## Setup
 
-### Requirements
+You need python, an openai api key and `ffmpeg` (handles audio extraction).
 
-- Python
-- An OpenAI API key
-- `ffmpeg` (required for audio extraction and chunking of large files).
-
-### Install
+Create a Python virtual environment and install the required packages
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Optionally create a `.env` file in the project directory containing:
+Set your OpenAI API key in your shell before running
 
 ```bash
-OPENAI_API_KEY=your_api_key_here
+export OPENAI_API_KEY=your_api_key_here
 ```
 
 ## How to run
