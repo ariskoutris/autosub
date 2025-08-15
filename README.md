@@ -1,4 +1,4 @@
-# 🎬 Video Transcriber
+# 🎬 AutoSub
 
 Command-line tool that takes a video or audio file as input and produces the audio transcript as raw text (.txt) and subtitles (.srt). For foreign-language speech, you can either translate to English or transcribe in the original language.
 
